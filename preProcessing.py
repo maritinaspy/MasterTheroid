@@ -31,6 +31,7 @@ import logging
 from threading import Thread, Lock
 from scipy.stats import pearsonr, wilcoxon
 from collections import Counter, defaultdict
+from matplotlib.colors import to_rgba
 
 # WARNING: This line is important for 3d plotting. DO NOT REMOVE
 from mpl_toolkits.mplot3d import Axes3D
@@ -50,6 +51,11 @@ from sklearn.metrics import make_scorer, accuracy_score, f1_score, confusion_mat
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit, cross_val_score, cross_validate, LeaveOneOut
 from sklearn.neural_network import MLPClassifier
 import xgboost as xgb
+from matplotlib.lines import Line2D
+import matplotlib.colors as mc
+import colorsys
+from sklearn.preprocessing import StandardScaler
+import numpy as np
 # import tensorflow as tf  
 # from tensorflow import keras
 # from keras.models import load_model
@@ -59,10 +65,13 @@ import xgboost as xgb
 # Prefix for intermediate files
 Prefix = ""
 THREADS_TO_USE = mp.cpu_count()  # Init to all CPUs
-FEATURE_VECTOR_FILENAME = "/home/thlamp/tcga/data/normalized_data_integrated_matrix.txt"
-os.chdir("/home/thlamp/tcga/data")
+FEATURE_VECTOR_FILENAME = "/datastore/maritina/normalized_data_integrated_matrix1_GENDER.txt"
+os.chdir("/datastore/maritina")
 lock = Lock()
 mpl_lock = Lock()
+
+GLOBAL_SAMPLEIDS = None
+GLOBAL_GENDER = None
 
 def progress(s):
     sys.stdout.write("%s" % (str(s)))
@@ -89,173 +98,43 @@ def message(s):
     logger.info(s)
 
 
-def locateTargetField():
-    """
-    Searches the index of a given field in the feature file.
-    """
-    # Open file
-    # fInput = open("control.csv", "r")
-    fInput = open("/datastore/cvas/output.txt", "r")
-    # fInput = open("allTogether.csv", "r")
-
-    # Read first line
-    sFirstLine = fInput.readline()
-    # Search for index of field of interest (e.g. ...death...)
-    iCnt = 0
-    for sCur in sFirstLine.split():
-        # if ("m_" not in sCur):
-        #     print sCur
-        if "Death" in sCur:
-            message("Found field '%s' with index %d" % (sCur, iCnt))
-        iCnt += 1
-
-    fInput.close()
-
-
-def determineCompleteSamples():
-    """
-    Determine instances that are mapped to all modalities
-    """
-    ### Determine instances that are mapped to all modalities
-    # All samples dict
-    dSamples = dict()
-
-    # Open sample sheet file
-    # fModalities = open('gdc_sample_sheet.2020-02-19.tsv')
-    fModalities = open('')
-    # Ignore header
-    sLine = fModalities.readline()
-    # For every line
-    while sLine != "":
-        sLine = fModalities.readline()
-        if sLine == "":
-            break
-
-        # Get sample ID (field #7 out of 8)
-        sSampleID = sLine.split("\t")[6].strip()
-        # Get data type (4) and remember it
-        sDataType = sLine.split("\t")[3].strip()
-        # Initialize samples that were not encountered earlier
-        if sSampleID not in dSamples.keys():
-            dSamples[sSampleID] = dict()
-        # Add data type to list
-        dSamples[sSampleID][sDataType] = 1
-    fModalities.close()
-
-    # For all collected sample IDs
-    message("+ Complete instances:")
-    for sSampleID, lDataTypes in dSamples.items():
-        # Output which one has exactly three data types
-        if len(lDataTypes) == 3:
-            message(sSampleID)
-
-    message("\n\n- Incomplete instances:")
-    for sSampleID, lDataTypes in dSamples.items():
-        # Output which one has exactly three data types
-        if len(lDataTypes) < 3:
-            message(sSampleID)
-
-
-def PCAOnControl():
-    """
-    Apply and visualize PCA on control data.
-    """
-
-    message("Opening file...")
-    mFeatures_noNaNs, vClass, sampleIDs, feat_names, tumor_stage = initializeFeatureMatrices(False, True)
-    mFeatures_noNaNs = getControlFeatureMatrix(mFeatures_noNaNs, vClass)
-    message("Opening file... Done.")
-    X, pca3DRes = getPCA(mFeatures_noNaNs, 3)
-    fig = draw3DPCA(X, pca3DRes)
-    fig.savefig("controlPCA3D.pdf", bbox_inches='tight')
-
-
-def PCAOnTumor():
-    """
-    Apply and visualize PCA on tumor data.
-    """
-    message("Opening file...")
-    mFeatures_noNaNs, vClass, sampleIDs, feat_names, tumor_stage = initializeFeatureMatrices(False, True)
-    mFeatures_noNaNs = getNonControlFeatureMatrix(mFeatures_noNaNs, vClass)
-    message("Opening file... Done.")
-    X, pca3DRes = getPCA(mFeatures_noNaNs, 3)
-
-    fig = draw3DPCA(X, pca3DRes)
-
-    fig.savefig("tumorPCA3D.pdf", bbox_inches='tight')
-
 def add_jitter(X, scale=0.01):
     noise = np.random.normal(loc=0.0, scale=scale, size=X.shape)
     return X + noise
 
-
-# def draw3DPCA(X, pca3DRes, c=None, cmap=plt.cm.gnuplot, spread=False, stages=False , title=''):
-    
-#     """
-#     Draw a 3D PCA given, allowing different classes coloring.
-#     :param c: This argument allows for different classes to be color-coded in the scatter plot. 
-#     :param cmap: The colormap to be used for coloring the data points
-#     :param spread: Adds jitter to spread out the data distribution.
-#     :param stages: Returns the spreaded data distribution to plot the stages for the same data
-#     :param title: The title of the plot 
-#     """
-    
-#     # Percentage of variance explained for each components
-#     message('explained variance ratio (first 3 components): %s'
-#             % str(pca3DRes.explained_variance_ratio_))
-   
-#     if spread:
-#         #X = QuantileTransformer(output_distribution='uniform').fit_transform(X)
-#         X = add_jitter(X, scale=0.05)
-
-    
-#     if len(np.unique(c)) == 2:
-#         # Define colors and labels that correspond to the classes in your plot
-#         legend_elements = [
-#             Line2D([0], [0], marker='o', color='w', label='Tumor sample', markerfacecolor='black', markersize=18),
-#             Line2D([0], [0], marker='o', color='w', label='Normal sample', markerfacecolor='yellow', markersize=18)
-#         ]
-#     else:
-#         legend_elements = [
-#             Line2D([0], [0], marker='o', color='w', label='Stage I', markerfacecolor='black', markersize=18),
-#             Line2D([0], [0], marker='o', color='w', label='Stage II', markerfacecolor='purple', markersize=18),
-#             Line2D([0], [0], marker='o', color='w', label='Stage III', markerfacecolor='darkorange', markersize=18),
-#             Line2D([0], [0], marker='o', color='w', label='Stage IV', markerfacecolor='yellow', markersize=18)
-#         ]
-
-#     fig = plt.figure(figsize =(20, 20))
-#     plt.clf()
-#     ax = fig.add_subplot(111, projection='3d')
-#     sc = ax.scatter(X[:, 0], X[:, 1], X[:, 2], edgecolor='k', c=c, cmap=cmap, depthshade=False, s=100)
-#     ax.set_xlabel("X coordinate (%4.2f)" % (pca3DRes.explained_variance_ratio_[0]), fontsize=18) 
-#     ax.set_ylabel("Y coordinate (%4.2f)" % (pca3DRes.explained_variance_ratio_[1]), fontsize=18)
-#     ax.set_zlabel("Z coordinate (%4.2f)" % (pca3DRes.explained_variance_ratio_[2]), fontsize=18)
-#     ax.set_xticklabels([])
-#     ax.set_yticklabels([])
-#     ax.set_zticklabels([])
-
-#     ax.set_title(title, fontsize = 20)
-    
-    
-#     ax.legend(handles=legend_elements, loc='upper right', fontsize=18)
-      
-
-#     fig.show()
-#     if stages:
-#         return X, fig
-#     else:
-#         return fig
-
-def draw3DPCA(X, pca3DRes, c=None, cmap=plt.cm.gnuplot, spread=False, stages=False, title=''):
+def lighten_color(color, amount=0.4):
     """
-    Draw a 3D PCA given, allowing different classes coloring.
-    :param c: This argument allows for different classes to be color-coded in the scatter plot. 
-    :param cmap: The colormap to be used for coloring the data points
-    :param spread: Adds jitter to spread out the data distribution.
-    :param stages: Returns the spreaded data distribution to plot the stages for the same data
-    :param title: The title of the plot 
+    Lightens the given color by multiplying (1-luminosity) by the given amount.
     """
-    print("explained variance ratio (first 3 components):", pca3DRes.explained_variance_ratio_)
+    try:
+        c = mc.cnames[color]
+    except:
+        c = color
+    c = colorsys.rgb_to_hls(*mc.to_rgb(c))
+    return colorsys.hls_to_rgb(c[0], 1 - amount * (1 - c[1]), c[2])
+
+
+def draw3DPCA(
+    X,
+    pca3DRes,
+    c=None,            # class (0/1) OR stage (0–4)
+    gender=None,       # 0=male, 1=female, 2=unknown
+    spread=False,
+    stages=False,
+    title=''
+):
+    """
+    3D PCA visualization.
+
+    Color encoding:
+    - Tumor/Normal: color = (gender + class)
+    - Tumor stages: color = (gender + stage)
+
+    Marker: same for all points.
+    """
+
+    print("explained variance ratio (first 3 components):",
+          pca3DRes.explained_variance_ratio_)
 
     if spread:
         X = add_jitter(X, scale=0.05)
@@ -263,42 +142,111 @@ def draw3DPCA(X, pca3DRes, c=None, cmap=plt.cm.gnuplot, spread=False, stages=Fal
     fig = plt.figure(figsize=(20, 20))
     ax = fig.add_subplot(111, projection='3d')
 
-    sc = ax.scatter(X[:, 0], X[:, 1], X[:, 2], edgecolor='k', c=c, cmap=cmap, depthshade=False, s=100)
+    n = X.shape[0]
 
-    ax.set_xlabel("X coordinate (%4.2f)" % pca3DRes.explained_variance_ratio_[0], fontsize=18)
-    ax.set_ylabel("Y coordinate (%4.2f)" % pca3DRes.explained_variance_ratio_[1], fontsize=18)
-    ax.set_zlabel("Z coordinate (%4.2f)" % pca3DRes.explained_variance_ratio_[2], fontsize=18)
+    # --------------------------
+    # INPUT SANITY
+    # --------------------------
+    if gender is None:
+        gender = np.array([2] * n)
+    else:
+        gender = np.asarray(gender, dtype=int)
+
+    if c is None:
+        c = np.zeros(n)
+    else:
+        c = np.asarray(c, dtype=int)
+
+    combo = list(zip(gender, c))
+    unique_c = np.unique(c)
+
+    # --------------------------
+    # COLOR MAPS
+    # --------------------------
+    color_map = {}
+
+    # Case A: Tumor / Normal (2 classes)
+    if len(unique_c) == 2:
+        color_map = {
+            (0, 0): "#1f77b4",  # Male - Tumor
+            (1, 0): "#d62728",  # Female - Tumor
+            (0, 1): "#aec7e8",  # Male - Normal
+            (1, 1): "#ff9896",  # Female - Normal
+        }
+
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', label='Male – Tumor',
+                   markerfacecolor='#1f77b4', markersize=16),
+            Line2D([0], [0], marker='o', color='w', label='Female – Tumor',
+                   markerfacecolor='#d62728', markersize=16),
+            Line2D([0], [0], marker='o', color='w', label='Male – Normal',
+                   markerfacecolor='#aec7e8', markersize=16),
+            Line2D([0], [0], marker='o', color='w', label='Female – Normal',
+                   markerfacecolor='#ff9896', markersize=16),
+        ]
+
+    # Case B: Tumor Stages
+    else:
+        stage_base_colors = {
+            1: "#1b9e77",   # Stage I
+            2: "#d95f02",   # Stage II
+            3: "#7570b3",   # Stage III
+            4: "#e7298a"    # Stage IV
+        }
+
+        for stage, base_color in stage_base_colors.items():
+            color_map[(0, stage)] = base_color
+            color_map[(1, stage)] = lighten_color(base_color, 0.4)
+
+        legend_elements = []
+        for stage, base_color in stage_base_colors.items():
+            legend_elements.extend([
+                Line2D([0], [0], marker='o', color='w',
+                       label=f'Male – Stage {stage}',
+                       markerfacecolor=base_color, markersize=16),
+                Line2D([0], [0], marker='o', color='w',
+                       label=f'Female – Stage {stage}',
+                       markerfacecolor=lighten_color(base_color, 0.4),
+                       markersize=16),
+            ])
+
+    # --------------------------
+    # ASSIGN COLORS
+    # --------------------------
+    colors = [to_rgba(color_map.get(x, "gray")) for x in combo]
+    # --------------------------
+    # PLOT
+    # --------------------------
+    ax.scatter(
+        X[:, 0], X[:, 1], X[:, 2],
+        c=colors,
+        marker="o",
+        edgecolor='k',
+        s=110,
+        depthshade=False
+    )
+
+    # --------------------------
+    # AXES & TITLE
+    # --------------------------
+    ax.set_xlabel(f"PC1 ({pca3DRes.explained_variance_ratio_[0]:.2f})",
+                  fontsize=18)
+    ax.set_ylabel(f"PC2 ({pca3DRes.explained_variance_ratio_[1]:.2f})",
+                  fontsize=18)
+    ax.set_zlabel(f"PC3 ({pca3DRes.explained_variance_ratio_[2]:.2f})",
+                  fontsize=18)
+
     ax.set_xticklabels([])
     ax.set_yticklabels([])
     ax.set_zticklabels([])
-    ax.set_title(title, fontsize=20)
+    ax.set_title(title, fontsize=22)
 
-    # Legend setup
-    if c is not None:
-        unique_classes = np.unique(c)
-
-        if len(unique_classes) == 2:
-            class_labels = {0: 'Tumor sample', 1: 'Normal sample'}
-        else:
-            class_labels = {
-                0: 'NA',
-                1: 'Stage I',
-                2: 'Stage II',
-                3: 'Stage III',
-                4: 'Stage IV'
-            }
-
-        colors = [cmap(cls / max(unique_classes)) for cls in unique_classes]
-        legend_elements = [
-            Line2D([0], [0], marker='o', color='w', label=class_labels.get(cls, f"Class {cls}"),
-                   markerfacecolor=col, markersize=18)
-            for cls, col in zip(unique_classes, colors)
-        ]
-        ax.legend(handles=legend_elements, loc='upper right', fontsize=18)
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=14)
 
     fig.show()
 
     return (X, fig) if stages else fig
+
 
 def getPCA(mFeatures_noNaNs, n_components=3):
     """
@@ -315,25 +263,37 @@ def getPCA(mFeatures_noNaNs, n_components=3):
     return X, pca
 
 def getPCAloadings(pca, pcaLabel='', return_data=False):
-    """
-    Prints the PCA loadings of the PC1
-    :param pca: pca trained object
-    :param return_data: return the results
-    """
-    # Get PC1 loadings
     pc1_loadings = pca.components_[0]
-    
-    # Match features with their loadings
+    n = pc1_loadings.shape[0]
+
+    # Τα 6 topo metrics του getGraphVector (με nodes)
+    base6 = [
+        'Edges', 'Nodes', 'Mean degree centrality',
+        'Number of cliques', 'Average node connectivity', 'Average shortest path'
+    ]
+
+    # Αν έχεις +1, το θεωρούμε Gender στο τέλος
+    if n == 7:
+        feature_names = base6 + ['Gender']
+    elif n == 6:
+        feature_names = base6
+    else:
+        # fallback: γενικά ονόματα, κράτα Gender τελευταίο
+        feature_names = [f'Feature_{i}' for i in range(n)]
+        feature_names[-1] = 'Gender'
+
     loadings_df = pd.DataFrame({
-        'Feature': ['Edges', 'Mean degree centrality', 'Number of cliques', 'Average node connectivity', 'Average shortest path'],
+        'Feature': feature_names,
         'PC1 Loading': pc1_loadings,
         'Abs Loading': np.abs(pc1_loadings)
     })
+
     if return_data:
         return loadings_df
     else:
         print(f'PCA loadings of the PC1 ({pcaLabel})')
         print(loadings_df)
+
 
 def getPCAloadingsPerClass(mGraphFeatures, y, pcaLabel):
 
@@ -379,16 +339,6 @@ def plotExplainedVariance(mFeatures_noNaNs, n_components=100, featSelection = Fa
     plt.show()
     plt.savefig("cumulative.png")
 
-def rand_jitter(arr):
-    """
-    Adds a random jitter quantity to an array.
-
-    :param arr: The array to build upon to determine the jitter level.
-    :return: The modifier array.
-    """
-    stdev = .01 * (max(arr) - min(arr))
-    return arr + np.random.randn(len(arr)) * stdev
-
 
 # def expander(t):
 #     return log10(t)
@@ -406,40 +356,6 @@ def rand_jitter(arr):
 #    return fRes
 
 
-def PCAOnAllData(bResetFiles = False):
-    """
-    Applies and visualizes PCA on all data.
-    """
-    bResetFiles = False
-    if len(sys.argv) > 1:
-        if "-resetFiles" in sys.argv: 
-            bResetFiles = True
-
-    # Initialize feature matrices
-    mFeatures_noNaNs, vClass, sampleIDs, feat_names, tumor_stage = initializeFeatureMatrices(bResetFiles=bResetFiles, bPostProcessing=True)
-    message("Applying PCA...")
-    X, pca3D = getPCA(mFeatures_noNaNs, 3)
-
-    # Spread
-    message("Applying PCA... Done.")
-
-    # Percentage of variance explained for each components
-    message('explained variance ratio (first 3 components): %s'
-            % str(pca3D.explained_variance_ratio_))
-
-    message('3 components values: %s'
-            % str(X))
-
-    message("Plotting PCA graph...")
-    # Assign colors
-    aCategories, y = np.unique(vClass, return_inverse=True)
-
-    draw3DPCA(X, pca3D, c=y / 2)
-    # DEBUG LINES
-    message("Returning categories: \n %s" % (str(aCategories)))
-    message("Returning categorical vector: \n %s" % (str(y)))
-    ####################
-    message("Plotting PCA graph... Done.")
 
 # def aencoder(x_train, epochs=200):
 #     """
@@ -486,7 +402,16 @@ def PCAOnAllData(bResetFiles = False):
 #     X_encoded = encoder_model.predict(mFeatures)
 #     return X_encoded
 
-def initializeFeatureMatrices(bResetFiles=False, bPostProcessing=True, bstdevFiltering=False, bNormalize=True, bNormalizeLog2Scale=True, nfeat=50, expSelectedFeats=False, bExportImpMat=False):
+def initializeFeatureMatrices(
+    bResetFiles=False, 
+    bPostProcessing=True, 
+    bstdevFiltering=False, 
+    bNormalize=True, 
+    bNormalizeLog2Scale=True, 
+    nfeat=50, 
+    expSelectedFeats=False, 
+    bExportImpMat=False
+):
     """
     Initializes the case/instance feature matrices, also creating intermediate files for faster startup.
 
@@ -500,6 +425,18 @@ def initializeFeatureMatrices(bResetFiles=False, bPostProcessing=True, bstdevFil
     :return: The initial feature matrix of the cases/instances.
     """
 
+    print("=" * 60)
+    print("initializeFeatureMatrices called with:")
+    print(f"bResetFiles: {bResetFiles}")
+    print(f"bPostProcessing: {bPostProcessing}")
+    print(f"bstdevFiltering: {bstdevFiltering}")
+    print(f"bNormalize: {bNormalize}")
+    print(f"bNormalizeLog2Scale: {bNormalizeLog2Scale}")
+    print(f"nfeat: {nfeat}")
+    print(f"expSelectedFeats: {expSelectedFeats}")
+    print(f"bExportImpMat: {bExportImpMat}")
+    print("=" * 60)
+
     message("Opening files...")
 
     try:
@@ -509,12 +446,9 @@ def initializeFeatureMatrices(bResetFiles=False, bPostProcessing=True, bstdevFil
 
         # Apply np.load hack
         ###################
-        # save np.load
         np_load_old = np.load 
-
-        # modify the default parameters of np.load
         np.load = lambda *a, **k: np_load_old(*a, allow_pickle=True, **k)
-        
+
         datafile = np.load(Prefix + "patientAndControlData.mat.npy")
         labelfile = np.load(Prefix + "patientAndControlDataLabels.mat.npy")
 
@@ -529,79 +463,81 @@ def initializeFeatureMatrices(bResetFiles=False, bPostProcessing=True, bstdevFil
         message("Trying to load saved data from txt...")
         fControl = open(FEATURE_VECTOR_FILENAME, "r")
         message("Loading labels and ids...")
-        # labelfile, should have stored tumor_stage or labels?       
         #DEBUG LINES
         message("FILENAME: "+FEATURE_VECTOR_FILENAME)
         ############
-        labelfile = np.genfromtxt(fControl, skip_header=1, usecols=(0, 97467),
-                                  missing_values=['NA', "na", '-', '--', 'n/a'],
-                                  dtype=np.dtype("object"), delimiter=' ').astype(str)
-        
+        labelfile = np.genfromtxt(
+            fControl, 
+            skip_header=1, 
+            usecols=(0, 100471, 100472),
+            missing_values=['NA', "na", '-', '--', 'n/a'],
+            dtype=np.dtype("object"), 
+            delimiter=' '
+        ).astype(str)
         labelfile[:, 0] = np.char.replace(labelfile[:, 0], '"', '')
-
         fControl.close()
-        
-        # message("This is the label file...")
-        # message(labelfile)
-        
         message("Splitting features, this is the size of labelfile")
         message(np.shape(labelfile))
-
         message("Loading labels and ids... Done.")
-        
         clinicalfile = loadTumorStage()
-        
         feat_names = getFeatureNames()
-
         datafile = loadPatientAndControlData()
         message("Trying to load saved data from txt... Done.")
-
         # Saving
         saveLoadedData(datafile, labelfile)
+        message(f"Shape of loaded datafile: {np.shape(datafile)}")
+        message(f"Shape of loaded labelfile: {np.shape(labelfile)}")
+        message("First 2 rows, first 2 columns of labelfile:\n%s" % str(labelfile[:2, :2]))
+
 
     message("Opening files... Done.")
-	
+
     # Split feature set to features/target field
-    mFeatures, vClass, sampleIDs, tumor_stage = splitFeatures(clinicalfile, datafile, labelfile)
-    
+    mFeatures, vClass, sampleIDs, tumor_stage, gender = splitFeatures(clinicalfile, datafile, labelfile)
+    #oi parakatw 3 grammes einai gia epalhtheusi oti allakse to mfeatures meta?
     mControlFeatureMatrix = getControlFeatureMatrix(mFeatures, vClass)
-    message("1 .This is the shape of the control matrix:")
+    message("1. This is the shape of the control matrix:")
     message(np.shape(mControlFeatureMatrix))
 
     if bExportImpMat:
+        print("Exporting imputed feature matrix.")
         exportImputatedMatrix(mFeatures, sampleIDs, feat_names)
 
     # the new bPostProcessing removes columns from mFeatures and mControlFeatureMatrix
     if bPostProcessing:
-        mFeatures, sampleIDs, vClass, feat_names, tumor_stage = postProcessFeatures(mFeatures, vClass, sampleIDs, tumor_stage, feat_names, bstdevFiltering=bstdevFiltering, nfeat=nfeat)
-            
+        print("Post-processing features...")
+        print(f"Shape before postProcessFeatures: {mFeatures.shape}")
+        mFeatures, sampleIDs, vClass, feat_names, tumor_stage, gender = postProcessFeatures(
+            mFeatures, vClass, sampleIDs, tumor_stage, feat_names, gender=gender, bstdevFiltering=bstdevFiltering, nfeat=nfeat
+        )
+        print(f"Shape after postProcessFeatures: {mFeatures.shape}")
 
     # Update control matrix, taking into account postprocessed data
     mControlFeatureMatrix = getControlFeatureMatrix(mFeatures, vClass)
-
-    message("2 .This is the shape of the control matrix:")
+    message("2. This is the shape of the control matrix:")
     message(np.shape(mControlFeatureMatrix))
 
     if bNormalize:
+        print("Normalizing features...")
+        print(f"Shape before normalization: {mFeatures.shape}")
         mFeatures = normalizeData(mFeatures, feat_names, bNormalizeLog2Scale)
+        print(f"Shape after normalization: {mFeatures.shape}")
 
     if expSelectedFeats and bstdevFiltering:
-        # open file
         with open('exportedSelectedFeatures.txt', 'w+') as f:
-            
-            # write elements of list
             for items in feat_names:
                 f.write('%s\n' %items)
-            
-        #DEBUG LINES
-        message("File written successfully")
-        ####################
+        print("File written successfully for exportedSelectedFeatures.txt")
+
+    print("Returning feature matrices from initializeFeatureMatrices.")
+    print(f"Final shapes - Features: {mFeatures.shape}, vClass: {vClass.shape}, sampleIDs: {len(sampleIDs)}, feat_names: {len(feat_names)}, tumor_stage: {tumor_stage.shape}, gender: {len(gender)}")
 
     # return feat_names in the function with updated postProcessFeatures
-    return mFeatures, vClass, sampleIDs, feat_names, tumor_stage
+    return mFeatures, vClass, sampleIDs, feat_names, tumor_stage, gender
 
 
-def postProcessFeatures(mFeatures, vClass, sample_ids, tumor_stage, featNames, bstdevFiltering = False, nfeat=50):
+
+def postProcessFeatures(mFeatures, vClass, sample_ids, tumor_stage, featNames, gender=None, bstdevFiltering = False, nfeat=50):
     """
     Post-processes feature matrix to replace NaNs with control instance feature mean values, and also to remove
     all-NaN columns.
@@ -662,6 +598,11 @@ def postProcessFeatures(mFeatures, vClass, sample_ids, tumor_stage, featNames, b
     filtered_vClass = vClass[mask]
     filtered_tumor_stage = tumor_stage[mask]
 
+    if gender is not None:
+        filtered_gender = gender[mask]
+    else:
+        filtered_gender = None
+
     features = getFeatureNames()
     
     # Create a new list without the elements at the specified indices
@@ -721,6 +662,15 @@ def postProcessFeatures(mFeatures, vClass, sample_ids, tumor_stage, featNames, b
 
     message("Are there any NaNs after postProcessing?")
     message(np.any(np.isnan(mFeatures[:, :])))
+    has_nans = np.any(np.isnan(mFeatures))
+    message(has_nans)
+
+    if has_nans:
+        num_nans = np.isnan(mFeatures).sum()
+        message(f"Number of NaNs in mFeatures: {num_nans}")
+
+    print("Showing a sample of mFeatures (first 5 rows, first 5 columns):")
+    print(mFeatures[:5, :5])
 
     message("This is mFeatures in postProcessing...")
     #message(mFeatures)
@@ -730,7 +680,7 @@ def postProcessFeatures(mFeatures, vClass, sample_ids, tumor_stage, featNames, b
         message("mFeatures shape after stdev filtering: " + str(np.shape(mFeatures)))
         message("filtered_features shape after stdev filtering: " + str(np.shape(filtered_features)))
 
-    return mFeatures, filtered_sample_ids, filtered_vClass, filtered_features, filtered_tumor_stage
+    return mFeatures, filtered_sample_ids, filtered_vClass, filtered_features, filtered_tumor_stage, filtered_gender
 
 def exportImputatedMatrix (mFeatures, sample_ids, feat_names):
     
@@ -809,29 +759,40 @@ def exportImputatedMatrix (mFeatures, sample_ids, feat_names):
 
     imputedDf = pd.DataFrame(matrixForKnnImp, index= filtered_features, columns=filtered_sample_ids)
 
-    imputedDf.to_csv('/home/thlamp/tcga/data/imputedMethylationMatrix.txt')  
+    imputedDf.to_csv('/datastore/maritina/imputedMethylationMatrix.txt')  
 
 def graphVectorPreprocessing(mGraphFeatures):
     """
-    :param mGraphFeatures: matrix with the topological features from graph
-    :returns the matrix of topological features from graph without the columns that have only one value across all rows
+    Scales ONLY the topological graph features.
+    If the last column is binary (0/1), it is treated as gender and kept unchanged.
+    Removes all-zero columns only from the scaled topo part.
     """
+    mGraphFeatures = np.asarray(mGraphFeatures)
+
+    # Detect if last column is binary 0/1 -> treat as gender
+    last_col = mGraphFeatures[:, -1]
+    is_binary_last = np.all(np.isin(np.unique(last_col), [0, 1]))
+
+    if is_binary_last and mGraphFeatures.shape[1] > 1:
+        X_topo = mGraphFeatures[:, :-1]
+        gender_col = last_col.reshape(-1, 1)
+    else:
+        X_topo = mGraphFeatures
+        gender_col = None
 
     scaler = StandardScaler()
-    scaler.fit(mGraphFeatures)
-    mGraphFeatures = scaler.transform(mGraphFeatures)
+    X_scaled = scaler.fit_transform(X_topo)
 
-    # search for columns that have only 0
-    res = np.all(mGraphFeatures == 0, axis = 0)
-    # keep the indices from the columns except from these with only 0
+    # remove columns that are all 0 after scaling (your original behavior)
+    res = np.all(X_scaled == 0, axis=0)
     resIndex = np.where(~res)[0]
-    #DEBUG LINES
-    print(resIndex)
-    ############
-    # remove the columns that have only 0 from the graph matrix
-    mGraphFeatures = mGraphFeatures[:, resIndex]
-    
-    return mGraphFeatures
+    X_scaled = X_scaled[:, resIndex]
+
+    # Re-attach gender unchanged (0/1)
+    if gender_col is not None:
+        X_scaled = np.hstack((X_scaled, gender_col))
+
+    return X_scaled
 
 def getLevelIndices():
     """
@@ -1129,8 +1090,8 @@ def splitFeatures(clinicalfile, datafile, labelfile):
     #############
 
     tumor_stage = clinicalfile[:, 1]
-    
-    vClass = labelfile[:, 1]
+    gender = labelfile[:, 1]
+    vClass = labelfile[:, 2]
     sampleIDs = labelfile[:, 0]
     # print("This is the vClass: ")
     # print(vClass)
@@ -1143,7 +1104,7 @@ def splitFeatures(clinicalfile, datafile, labelfile):
     # message(mFeatures)
     message("Splitting features... Done.")
 
-    return mFeatures, vClass, sampleIDs, tumor_stage
+    return mFeatures, vClass, sampleIDs, tumor_stage, gender
 
 
 def saveLoadedData(datafile, labelfile):
@@ -1153,8 +1114,8 @@ def saveLoadedData(datafile, labelfile):
     :param labelfile: The matrix containing the label data.
     """
     message("Saving data in dir..." + os.getcwd())
-    np.save(Prefix + "patientAndControlData.mat.npy", datafile)
-    np.save(Prefix + "patientAndControlDataLabels.mat.npy", labelfile)
+    np.save(Prefix + "normalized_data_integrated_matrix1_GENDER.txt", datafile)
+    np.save(Prefix + "normalized_data_integrated_matrix1_GENDER.txt", labelfile)
     # np_datafile =  np.array(datafile)
     # np_labelfile = np.array(labelfile)
     # np.savetxt("firstRepresentationDataFile.txt", np_datafile)
@@ -1169,7 +1130,7 @@ def loadPatientAndControlData():
     """
     message("Loading features...")
     fControl = open(FEATURE_VECTOR_FILENAME, "r")
-    datafile = np.genfromtxt(fControl, skip_header=1, usecols=range(1, 97467),
+    datafile = np.genfromtxt(fControl, skip_header=1, usecols=range(1, 100473),
                              missing_values=['NA', "na", '-', '--', 'n/a'], delimiter=" ",
                              dtype=np.dtype("float")
                              )
@@ -1189,10 +1150,10 @@ def loadTumorStage():
     message("Loading tumor stage...")
     fControl = open(FEATURE_VECTOR_FILENAME, "r")
     
-    clinicalfile = np.genfromtxt(fControl, skip_header=1, usecols=(0, 97468),
+    clinicalfile = np.genfromtxt(fControl, skip_header=1, usecols=(0, 100473),
                                   missing_values=['NA', "na", '-', '--', 'n/a'],
                                   dtype=np.dtype("object"), delimiter=' ').astype(str)
-    
+
     clinicalfile[:, 0] = np.char.replace(clinicalfile[:, 0], '"', '')
     clinicalfile[:, 1] = np.char.replace(clinicalfile[:, 1], 'NA', '0')
     fControl.close()
@@ -1201,9 +1162,12 @@ def loadTumorStage():
     # message(clinicalfile)
     message("These are the dimensions of the clinical file")
     message(np.shape(clinicalfile))
+    message("First 2 rows, first 2 columns of clinicalfile:")
+    message(clinicalfile[:2, :2])
+
     return clinicalfile
 
-def filterTumorStage(mFeatures, vTumorStage, vClass, sampleIDs, mgraphsFeatures=None, useGraphFeatures=False):    
+def filterTumorStage(mFeatures, vTumorStage, vClass, sampleIDs, vGender=None, mgraphsFeatures=None, useGraphFeatures=False):    
     """
     Filters out the samples that don't have data at tumor stage (tumor stage == 0) and control samples (class = 2) from the feature matrix, graph 
     feature matrix and tumor stage array and returns these objects.
@@ -1221,7 +1185,7 @@ def filterTumorStage(mFeatures, vTumorStage, vClass, sampleIDs, mgraphsFeatures=
     iNonControlIndex = np.where(vClass == "2")[0]
     combinedIndex = np.unique(np.concatenate((iNonControlIndex, izerosIndex), axis=None))
     mSelectedFeatures = np.delete(mFeatures, combinedIndex, 0)
-    if useGraphFeatures:
+    if useGraphFeatures and mgraphsFeatures is not None:
         mSelectedGraphFeatures = np.delete(mgraphsFeatures, combinedIndex, 0)
     sselectedTumorStage = np.delete(vTumorStage, combinedIndex, 0)
     selectedvClass = np.delete(vClass, combinedIndex, 0)
@@ -1235,6 +1199,11 @@ def filterTumorStage(mFeatures, vTumorStage, vClass, sampleIDs, mgraphsFeatures=
     message(combinedIndex)
     message("Shape of matrix:")
     message(np.shape(mSelectedFeatures))
+    if vGender is not None:
+        selectedGender = np.delete(vGender, combinedIndex, 0)
+    else:
+        selectedGender = None
+
     if useGraphFeatures:
         message("Shape of graph matrix:")
         message(np.shape(mSelectedGraphFeatures))
@@ -1242,9 +1211,18 @@ def filterTumorStage(mFeatures, vTumorStage, vClass, sampleIDs, mgraphsFeatures=
     message(np.shape(sselectedTumorStage))
     ###################
     if useGraphFeatures:
-        return mSelectedFeatures, mSelectedGraphFeatures, sselectedTumorStage, selectedvClass
+        if vGender is not None:
+            return mSelectedFeatures, mSelectedGraphFeatures, sselectedTumorStage, selectedvClass, selectedGender
+        else:
+            return mSelectedFeatures, mSelectedGraphFeatures, sselectedTumorStage, selectedvClass
     else:
-        return mSelectedFeatures, sselectedTumorStage, selectedvClass
+        if vGender is not None:
+            return mSelectedFeatures, sselectedTumorStage, selectedvClass, selectedGender
+        else:
+            return mSelectedFeatures, sselectedTumorStage, selectedvClass    
+    
+
+    
 
 def kneighbors(X, y, lmetricResults, sfeatClass, savedResults):
     """
@@ -1493,28 +1471,6 @@ def plotSDdistributions(mFeatures, sfeatureNames):
         # function to show the plot
         plt.show()
 
-def testSpreadingActivation():
-    """
-    A harmless test of graph drawing and spreading activation effect.
-    """
-    g = nx.Graph()  
-
-    # adds edges to the graph
-    g.add_edge(1, 2, weight=0.5)
-    g.add_edge(2, 3, weight=0.5)
-    g.add_edge(3, 4, weight=0.5)
-    g.add_edge(2, 6, weight=0.2)
-    g.add_edge(5, 6, weight=0.8)
-
-    for nNode in g.nodes():
-        g.nodes[nNode]['weight'] = nNode * 10
-        
-    drawAndSaveGraph(g, bSave = False)
-
-    spreadingActivation(g)
-    drawAndSaveGraph(g, bSave = False)
-    
-
 
 def getFeatureNames():
     """
@@ -1533,6 +1489,9 @@ def getFeatureNames():
     
     # Remove double quotes from all elements in the list
     column_names = [element.replace('"', '') for element in column_names]
+    message("First 2 feature names: " + str(column_names[:2]))
+    message("Last 2 feature names: " + str(column_names[-2:]))
+    message("Total number of feature names: {}".format(len(column_names)))
     message("Loading feature names... Done.")
     return column_names
 
@@ -1642,7 +1601,8 @@ def getFeatureGraph(mAllData, saFeatures, dEdgeThreshold=0.30, nfeat=50, bResetG
 
     else:
         # fUsefulFeatureNames = open("/home/thlamp/tcga/data/DEGs" +str(nfeat) + ".csv", "r")
-        fUsefulFeatureNames = open("/home/thlamp/tcga/data/" + degsFile, "r")
+        #fUsefulFeatureNames = open("C:/py_script/defs" + degsFile, "r")
+        fUsefulFeatureNames = open(os.path.join("/datastore/maritina", degsFile), "r")
 
 
         # labelfile, should have stored tumor_stage or labels?       
@@ -1756,6 +1716,18 @@ def getFeatureGraph(mAllData, saFeatures, dEdgeThreshold=0.30, nfeat=50, bResetG
         with open(f"{Prefix}usefulFeatureNames{os.path.splitext(degsFile)[0]}.pickle", "wb") as fOut: ## This line opens a file named "usefulFeatureNames.pickle" in binary write mode ("wb"). The with statement is used to ensure that the file is properly closed after writing.
             pickle.dump(saUsefulFeatureNames, fOut) ## serialize the Python object saUsefulFeatureNames and write the serialized data to the file fOut. The object is serialized into a binary format suitable for storage or transmission.
 
+    message("DEBUG: Inspecting graph and data objects")
+
+    # Graph preview
+    message(f"Graph object: {g}")
+    message(f"First 2 nodes: {list(g.nodes(data=True))[:5]}")
+    message(f"First 2 edges: {list(g.edges(data=True))[:5]}")
+
+    # mAllData preview
+    message(f"mAllData shape: {mAllData.shape}")
+    message("First 20 rows x first 5 features of mAllData:")
+    print(mAllData[:20, :5])
+
     message("Saving graph... Done.")
 
     message("Trying to load graph... Done.")
@@ -1781,16 +1753,57 @@ def getGraphAndData(bResetGraph=False, dEdgeThreshold=0.3, bResetFiles=False, bP
     :return: A tuple of the form (feature correlation graph, all feature matrix, instance/case class matrix,
         important feature names list, sample ids)
     """
+    print("=" * 60)
+    print("GET GRAPH AND DATA - MAIN PIPELINE FUNCTION")
+    print("=" * 60)
+    print(f"bResetGraph: {bResetGraph}")
+    print(f"dEdgeThreshold: {dEdgeThreshold}")
+    print(f"bResetFiles: {bResetFiles}")
+    print(f"bPostProcessing: {bPostProcessing}")
+    print(f"bstdevFiltering: {bstdevFiltering}")
+    print(f"bNormalize: {bNormalize}")
+    print(f"bNormalizeLog2Scale: {bNormalizeLog2Scale}")
+    print(f"bShow: {bShow}")
+    print(f"bSave: {bSave}")
+    print(f"stdevFeatSelection: {stdevFeatSelection}")
+    print(f"nfeat: {nfeat}")
+    print(f"expSelectedFeats: {expSelectedFeats}")
+    print(f"bExportImpMat: {bExportImpMat}")
+    print(f"degsFile: {degsFile}")
+
     # Do mFeatures_noNaNs has all features? Have we applied a threshold to get here?
-    mFeatures_noNaNs, vClass, sampleIDs, feat_names, tumor_stage = initializeFeatureMatrices(bResetFiles=bResetFiles, bPostProcessing=bPostProcessing, bstdevFiltering=bstdevFiltering,
+    print("\n📥 Step 1: Initializing feature matrices...")
+    mFeatures_noNaNs, vClass, sampleIDs, feat_names, tumor_stage, gender = initializeFeatureMatrices(bResetFiles=bResetFiles, bPostProcessing=bPostProcessing, bstdevFiltering=bstdevFiltering,
                                                          bNormalize=bNormalize, bNormalizeLog2Scale=bNormalizeLog2Scale, nfeat=nfeat, expSelectedFeats=expSelectedFeats, bExportImpMat=bExportImpMat)
+    print(f"✅ Feature matrices initialized:")
+    print(f"   - mFeatures_noNaNs shape: {mFeatures_noNaNs.shape}")
+    print(f"   - vClass shape: {vClass.shape}")
+    print(f"   - sampleIDs shape: {sampleIDs.shape}")
+    print(f"   - feat_names length: {len(feat_names)}")
+    print(f"   - tumor_stage shape: {tumor_stage.shape}")
+
+    print("\n📊 Step 2: Creating feature graph...")
     gToDraw, saRemainingFeatureNames = getFeatureGraph(mFeatures_noNaNs, feat_names, dEdgeThreshold=dEdgeThreshold, nfeat=nfeat, bResetGraph=bResetGraph, stdevFeatSelection=stdevFeatSelection, degsFile=degsFile)
+    print(f"✅ Feature graph created:")
+    print(f"   - Graph nodes: {gToDraw.number_of_nodes()}")
+    print(f"   - Graph edges: {len(gToDraw.edges())}")
+    print(f"   - Remaining features: {len(saRemainingFeatureNames)}")
     
     if bShow or bSave:
+        print("\n🎨 Step 3: Drawing and saving graph...")
         drawAndSaveGraph(gToDraw, sPDFFileName="corrGraph.pdf",bShow = bShow, bSave = bSave)
+        print("✅ Graph visualization completed")
+    else:
+        print("\n⏭️  Skipping graph visualization (bShow=False, bSave=False)")
 
-    return gToDraw, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, tumor_stage
+    global GLOBAL_SAMPLEIDS, GLOBAL_GENDER
+    GLOBAL_SAMPLEIDS = sampleIDs
+    GLOBAL_GENDER = gender
 
+    print("\n✅ GET GRAPH AND DATA COMPLETED SUCCESSFULLY")
+    print("=" * 60)
+    
+    return gToDraw, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, tumor_stage, gender
 
 def drawAndSaveGraph(gToDraw, sPDFFileName="corrGraph",bShow = True, bSave = True):
     
@@ -1895,15 +1908,6 @@ def mGraphDistribution(mFeatures_noNaNs, feat_names, startThreshold = 0.3, endTh
         plt.title('Number of nodes in the main graph from DEGs')
     plt.show()
     plt.savefig("nodesDistribution.png")
-
-def getMeanDegreeCentrality(gGraph):
-    """
-    Returns the average of the degree centralities of the nodes of a given graph.
-    :param gGraph: The given graph.
-    :return: The mean of degree centralities.
-    """
-    mCentralities = list(nx.degree_centrality(gGraph).values())
-    return np.mean(mCentralities)
 
 
 # Does NOT work (for several reasons...)
@@ -2735,7 +2739,7 @@ def plotTopologicalFeatures(sampleIDs, features, directory, title, filename):
     plt.xlabel("Sample ID")
     plt.ylabel("Value")
     plt.tight_layout()
-    plt.savefig(f'/home/thlamp/tcga/data/{directory}/{filename}')
+    plt.savefig(f'/datastore/maritina/{directory}/{filename}')
     plt.show()
 
 def getSampleGraphVectors(gMainGraph, mFeatures_noNaNs, saRemainingFeatureNames, sampleIDs, feat_names, bResetFeatures=True, dEdgeThreshold=0.3, nfeat=50,
@@ -2820,6 +2824,34 @@ def getSampleGraphVectors(gMainGraph, mFeatures_noNaNs, saRemainingFeatureNames,
         plotTopologicalFeatures(sampleIDsSelected, mGraphFeatures[:, 3], directory, 'Number of Cliques', 'cliques_plot.png')
         plotTopologicalFeatures(sampleIDsSelected, mGraphFeatures[:, 4], directory, 'Average Node Connectivity', 'average_node_connectivity_plot.png')
         plotTopologicalFeatures(sampleIDsSelected, mGraphFeatures[:, 5], directory, 'Average Shortest Path', 'avg_shortest_path_plot.png')
+    
+    global GLOBAL_SAMPLEIDS, GLOBAL_GENDER
+    if GLOBAL_SAMPLEIDS is None or GLOBAL_GENDER is None:
+        raise RuntimeError("GLOBAL_SAMPLEIDS/GLOBAL_GENDER not set. Ensure getGraphAndData() ran first.")
+
+    # sampleIDsSelected exists only in recompute path; define it also for load path
+    if 'sampleIDsSelected' not in locals():
+        if numOfSelectedSamples < 0:
+            sampleIDsSelected = sampleIDs
+        else:
+            half = int(numOfSelectedSamples / 2)
+            sampleIDsSelected = np.concatenate((sampleIDs[0:half], sampleIDs[-half:]))
+
+    gender_map = {sid: g for sid, g in zip(GLOBAL_SAMPLEIDS, GLOBAL_GENDER)}
+    genderSelected = np.array([gender_map[sid] for sid in sampleIDsSelected], dtype=float).reshape(-1, 1)
+
+    # avoid double-append if already appended
+    if mGraphFeatures.shape[1] >= 1:
+        last_col = mGraphFeatures[:, -1]
+    # if last col already looks binary 0/1, assume gender already present
+        if np.all(np.isin(np.unique(last_col), [0, 1])):
+            return mGraphFeatures
+
+    if mGraphFeatures.shape[0] != genderSelected.shape[0]:
+        raise ValueError(f"Row mismatch: graph={mGraphFeatures.shape[0]} gender={genderSelected.shape[0]}")
+
+    mGraphFeatures = np.hstack((mGraphFeatures, genderSelected))
+
     return mGraphFeatures
 
 
@@ -3575,45 +3607,8 @@ def plotFeatureVectors(df):
       
         
 
-    
 
-def scalingPerClass(matrix, classes):
-    # Separate the matrix into two sub-matrices based on class labels
-    matrix_class_0 = matrix[classes == "1"]
-    matrix_class_1 = matrix[classes == "2"]
-
-    # Initialize the StandardScaler
-    scaler_0 = StandardScaler()
-    scaler_1 = StandardScaler()
-
-    # Scale each sub-matrix
-    scaled_matrix_class_0 = scaler_0.fit_transform(matrix_class_0)
-    # DEBUG LINES
-    message("Shape of non control matrix in scaling: " + str(np.shape(scaled_matrix_class_0)))
-    ###########
-    scaled_matrix_class_1 = scaler_1.fit_transform(matrix_class_1)
-    # DEBUG LINES
-    message("Shape of control matrix in scaling: " + str(np.shape(scaled_matrix_class_1)))
-    ###########
-
-    # Combine the scaled sub-matrices back into the original positions
-    scaled_matrix = np.zeros_like(matrix, dtype=float)
-    
-    scaled_matrix[classes == "1"] = scaled_matrix_class_0
-    scaled_matrix[classes == "2"] = scaled_matrix_class_1
-
-    # search for columns that have only 0
-    res = np.all(scaled_matrix == 0, axis = 0)
-    # keep the indices from the columns except from these with only 0
-    resIndex = np.where(~res)[0]
-    #DEBUG LINES
-    print(resIndex)
-    ############
-    # remove the columns that have only 0 from the graph matrix
-    scaled_matrix = scaled_matrix[:, resIndex]
-    return scaled_matrix
-
-def featureVectorsEvaluation(vSelectedSamplesClasses, mFeatures_noNaNs, metricResults, savedResults, vSelectedtumorStage, sampleIDs,
+def featureVectorsEvaluation(vSelectedSamplesClasses, mFeatures_noNaNs, metricResults, savedResults, vSelectedtumorStage, sampleIDs, vGender,
                              omicLevel=None, classes=False, tumorStage=False, bstdevFiltering=False, bdecisionTree=False, bkneighbors=False, bxgboost=False, 
                              brandomforest=False, bnaivebayes=False, bstratifieddummyclf=False,
                              bmostfrequentdummyclf=False, bmlpClassifier=False):    
@@ -3629,128 +3624,179 @@ def featureVectorsEvaluation(vSelectedSamplesClasses, mFeatures_noNaNs, metricRe
     :param tumorStage: boolean to run algorithms for tumor stages
     :param bstdevFiltering: boolean for feature selection
     """   
+    print("=== featureVectorsEvaluation STARTED ===")
+    print(f"📊 Input features shape: {mFeatures_noNaNs.shape}")
+    print(f"🔬 Classes: {classes}, TumorStage: {tumorStage}")
+    print(f"🎯 Feature selection: {bstdevFiltering}")
+    print(f"🔄 Omic level: {omicLevel}")
     
     if classes:
+        print("\n🎯 ΕΚΠΑΙΔΕΥΣΗ ΜΟΝΤΕΛΩΝ ΜΕ FEATURE VECTORS ΓΙΑ CLASS CLASSIFICATION")
         # Extract class vector for colors
         aCategories, y = np.unique(vSelectedSamplesClasses, return_inverse=True)
-        X, pca3D = getPCA(mFeatures_noNaNs, 100)
-        # fig = draw3DPCA(X, pca3D, c=y)
-
-        # fig.savefig(Prefix + "SelectedSamplesGraphFeaturePCA.pdf")
-
+        print(f"   📋 Μοναδικές κλάσεις: {aCategories}")
+        print(f"   🎯 Target vector shape: {y.shape}")
         
+        X, pca3D = getPCA(mFeatures_noNaNs, 100)
+        print(f"   📊 PCA transformed features shape: {X.shape}")
+
         if bstdevFiltering:
             label = '_featureSelection'
             pcaLabel='/Feature Selection'
             filename = '_featureSelection'
+            print("   🔍 Χρήση feature selection")
         else:
             label = ''
             filename = ''
             pcaLabel = ''
+            print("   🔍 Χωρίς feature selection")
+            
         if omicLevel != None:
             label += f'_{omicLevel}'
             pcaLabel= f'{pcaLabel}/{omicLevel}'
             filename = f'{filename}_{omicLevel}'
+            print(f"   🧬 Omic level: {omicLevel}")
 
         filename=f'_Class{filename}'
         pcaLabel = f'3D PCA Plot for feature vector (Class{pcaLabel})'
-        
-        fig = draw3DPCA(X, pca3D, c=y, title=pcaLabel)
+        vGender_clean = np.array(vGender, dtype=object)
+        mask_na = (vGender_clean == 'NA') | (vGender_clean == '') | (vGender_clean == 'NaN')
+        vGender_clean[mask_na] = 2
+        gender_vec = vGender_clean.astype(int)
+        print(f"   📈 Δημιουργία PCA plot: {pcaLabel}")
+        fig = draw3DPCA(X, pca3D, c=y, gender=gender_vec, title=pcaLabel)
         fig.savefig(f'{Prefix}FeaturePCA{filename}.pdf')
+        print(f"   💾 Αποθήκευση PCA: {Prefix}FeaturePCA{filename}.pdf")
 
+        # Εκτέλεση αλγορίθμων ML
+        algorithms_run = 0
         if bdecisionTree:
-            message("Decision tree on feature vectors and classes")
+            print("   🌳 Decision tree on feature vectors and classes")
             classify(X, y, metricResults, "DT_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bkneighbors:
-            message("KNN on feature vectors and classes")
+            print("   📍 KNN on feature vectors and classes")
             kneighbors(X, y, metricResults, "kNN_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bxgboost:
-            message("XGBoost on feature vectors and classes")
+            print("   🚀 XGBoost on feature vectors and classes")
             xgboost(X, y, metricResults, "XGB_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if brandomforest:
-            message("Random Forest on feature vectors and classes")
+            print("   🌲 Random Forest on feature vectors and classes")
             RandomForest(X, y, metricResults, "RF_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bnaivebayes:
-            message("Naive Bayes on feature vectors and classes")
+            print("   📊 Naive Bayes on feature vectors and classes")
             NBayes(X, y, metricResults, "NV_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bstratifieddummyclf:  
-            message("Stratified Dummy Classifier on feature vectors and classes")
+            print("   🎭 Stratified Dummy Classifier on feature vectors and classes")
             stratifiedDummyClf(X, y, metricResults, "StratDummy_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bmostfrequentdummyclf:
-            message("Most frequent Dummy Classifier on feature vectors and classes")
+            print("   🎯 Most frequent Dummy Classifier on feature vectors and classes")
             mostFrequentDummyClf(X, y, metricResults, "MFDummy_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
 
         if bmlpClassifier:
-            message("MLP Classifier on feature vectors and classes")
+            print("   🧠 MLP Classifier on feature vectors and classes")
             mlpClassifier(X, y, metricResults, "MLP_FeatureV_Class" + label, savedResults)
+            algorithms_run += 1
+
+        print(f"   ✅ Εκτελέστηκαν {algorithms_run} αλγόριθμοι για Class classification")
 
 
-        if tumorStage:
-            filteredFeatures, filteredTumorStage, selectedvClass = filterTumorStage(mFeatures_noNaNs, vSelectedtumorStage, vSelectedSamplesClasses, sampleIDs, useGraphFeatures=False)
+    if tumorStage:
+        print("\n🎯 ΕΚΠΑΙΔΕΥΣΗ ΜΟΝΤΕΛΩΝ ΜΕ FEATURE VECTORS ΓΙΑ TUMOR STAGE CLASSIFICATION")
+        filteredFeatures, filteredTumorStage, selectedvClass, filteredGender = filterTumorStage(mFeatures_noNaNs, vSelectedtumorStage, vSelectedSamplesClasses, sampleIDs, vGender=vGender, useGraphFeatures=False)
+        print(f"   📊 Filtered features shape: {filteredFeatures.shape}")
+        print(f"   📋 Filtered tumor stages: {np.unique(filteredTumorStage)}")
 
-            # Extract tumor stages vector for colors
-            aCategories, y = np.unique(filteredTumorStage, return_inverse=True)
+        # Extract tumor stages vector for colors
+        aCategories, y = np.unique(filteredTumorStage, return_inverse=True)
+        print(f"   📋 Μοναδικά tumor stages: {aCategories}")
+        print(f"   🎯 Target vector shape: {y.shape}")
 
-            X, pca3D = getPCA(filteredFeatures, 100)
-            fig = draw3DPCA(X, pca3D, c=y)
-            fig.savefig(Prefix + "SelectedSamplesGraphFeaturePCA.pdf")
+        X, pca3D = getPCA(filteredFeatures, 100)
+        print(f"   📊 PCA transformed features shape: {X.shape}")
 
-            pcaLabel = ''
-            if bstdevFiltering:
-                label = '_featureSelection'
-                pcaLabel='Feature Selection'
-                filename = 'featureSelection'
-            else:
-                label = ''
-                filename = ''
-            if omicLevel != None:
-                label += f'_{omicLevel}'
-                pcaLabel= f'{pcaLabel}/{omicLevel}'
-                filename = f'{filename}/{omicLevel}'
-
-            filename=f'TumorStage/{filename}'
-            pcaLabelStage = f'3D PCA Plot for feature vector (Tumor Stage/{pcaLabel})'
+        pcaLabel = ''
+        if bstdevFiltering:
+            label = '_featureSelection'
+            pcaLabel='Feature Selection'
+            filename = 'featureSelection'
+            print("   🔍 Χρήση feature selection")
+        else:
+            label = ''
+            filename = ''
+            print("   🔍 Χωρίς feature selection")
             
-            fig = draw3DPCA(X, pca3D, c=y, title=pcaLabelStage)
-            fig.savefig(f'{Prefix}FeaturePCA{filename}.pdf')
+        if omicLevel != None:
+            label += f'_{omicLevel}'
+            pcaLabel= f'{pcaLabel}/{omicLevel}'
+            filename = f'{filename}/{omicLevel}'
+            print(f"   🧬 Omic level: {omicLevel}")
 
-            if bdecisionTree:
-                message("Decision tree on feature vectors and tumor stages")
-                classify(X, y, metricResults, "DT_FeatureV_TumorStage" + label, savedResults)
+        filename=f'TumorStage{filename}'
+        pcaLabelStage = f'3D PCA Plot for feature vector (Tumor Stage{pcaLabel})'
+        
+        print(f"   📈 Δημιουργία PCA plot: {pcaLabelStage}")
+        fig = draw3DPCA(X, pca3D, c=y, gender=filteredGender, title=pcaLabelStage)
+        fig.savefig(f'{Prefix}FeaturePCA{filename}.pdf')
+        print(f"   💾 Αποθήκευση PCA: {Prefix}FeaturePCA{filename}.pdf")
 
-            if bkneighbors:
-                message("KNN on feature vectors and tumor stages")
-                kneighbors(X, y, metricResults, "kNN_FeatureV_TumorStage" + label, savedResults)
+        # Εκτέλεση αλγορίθμων ML
+        algorithms_run = 0
+        if bdecisionTree:
+            print("   🌳 Decision tree on feature vectors and tumor stages")
+            classify(X, y, metricResults, "DT_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if bxgboost:
-                message("XGBoost on feature vectors and tumor stages")
-                xgboost(X, y, metricResults, "XGB_FeatureV_TumorStage" + label, savedResults)
+        if bkneighbors:
+            print("   📍 KNN on feature vectors and tumor stages")
+            kneighbors(X, y, metricResults, "kNN_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if brandomforest:
-                message("Random Forest on feature vectors and tumor stages")
-                RandomForest(X, y, metricResults, "RF_FeatureV_TumorStage" + label, savedResults)
+        if bxgboost:
+            print("   🚀 XGBoost on feature vectors and tumor stages")
+            xgboost(X, y, metricResults, "XGB_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if bnaivebayes:
-                message("Naive Bayes on feature vectors and tumor stages")
-                NBayes(X, y, metricResults, "NV_FeatureV_TumorStage" + label, savedResults)  
+        if brandomforest:
+            print("   🌲 Random Forest on feature vectors and tumor stages")
+            RandomForest(X, y, metricResults, "RF_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if bstratifieddummyclf:  
-                message("Stratified Dummy Classifier on feature vectors and tumor stages")
-                stratifiedDummyClf(X, y, metricResults, "StratDummy_FeatureV_TumorStage" + label, savedResults)
+        if bnaivebayes:
+            print("   📊 Naive Bayes on feature vectors and tumor stages")
+            NBayes(X, y, metricResults, "NV_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if bmostfrequentdummyclf:
-                message("Most frequent Dummy Classifier on feature vectors and tumor stages")
-                mostFrequentDummyClf(X, y, metricResults, "MFDummy_FeatureV_TumorStage" + label, savedResults)
+        if bstratifieddummyclf:  
+            print("   🎭 Stratified Dummy Classifier on feature vectors and tumor stages")
+            stratifiedDummyClf(X, y, metricResults, "StratDummy_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
 
-            if bmlpClassifier:
-                message("MLP Classifier on feature vectors and tumor stages")
-                mlpClassifier(X, y, metricResults, "MLP_FeatureV_TumorStage" + label, savedResults)
+        if bmostfrequentdummyclf:
+            print("   🎯 Most frequent Dummy Classifier on feature vectors and tumor stages")
+            mostFrequentDummyClf(X, y, metricResults, "MFDummy_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
+
+        if bmlpClassifier:
+            print("   🧠 MLP Classifier on feature vectors and tumor stages")
+            mlpClassifier(X, y, metricResults, "MLP_FeatureV_TumorStage" + label, savedResults)
+            algorithms_run += 1
+
+        print(f"   ✅ Εκτελέστηκαν {algorithms_run} αλγόριθμοι για Tumor Stage classification")
+
+    print("=== featureVectorsEvaluation COMPLETED ===\n")
 
 
 def main(argv):
@@ -3841,7 +3887,7 @@ def main(argv):
     message("Run setup: " + (str(args)))
 
     # change working directory
-    os.chdir('/home/thlamp/tcga/data')
+    os.chdir('/datastore/maritina')
 
     # Update global prefix variable
     global Prefix
@@ -3894,7 +3940,7 @@ def main(argv):
                     bstdevFiltering = True
                     stdevFeatSelection = True
                 # main function
-                gMainGraph, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, vtumorStage = getGraphAndData(bResetGraph=args.resetGraph,
+                gMainGraph, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, vtumorStage, gender = getGraphAndData(bResetGraph=args.resetGraph,
                                                                                                 dEdgeThreshold=threshold, bResetFiles=args.resetCSVCacheFiles,
                                                                                                 bPostProcessing=args.postProcessing, bstdevFiltering=bstdevFiltering,
                                                                                                 bNormalize=args.normalization, bNormalizeLog2Scale=args.logScale,
@@ -3924,8 +3970,8 @@ def main(argv):
                     vSelectedSamplesClasses = np.concatenate((vClass[0:int(args.numberOfInstances / 2)][:], vClass[-int(args.numberOfInstances / 2):][:]), axis=0)
                     vSelectedtumorStage = np.concatenate((vtumorStage[0:int(args.numberOfInstances / 2)][:], vtumorStage[-int(args.numberOfInstances / 2):][:]), axis=0)
                 
-                filteredFeatures, filteredGraphFeatures, filteredTumorStage, selectedvClass = filterTumorStage(mFeatures_noNaNs, vSelectedtumorStage, vSelectedSamplesClasses, sampleIDs, mGraphFeatures, useGraphFeatures=True)
-
+                filteredFeatures, filteredGraphFeatures, filteredTumorStage, selectedvClass, selectedGender = filterTumorStage(mFeatures_noNaNs, vSelectedtumorStage, vSelectedSamplesClasses, sampleIDs, vGender=gender, mgraphsFeatures=mGraphFeatures, useGraphFeatures=True)
+                
 
                 graphLabels = ''
                 pcaLabel = ''
@@ -3951,15 +3997,9 @@ def main(argv):
 
                 if args.classes or args.tumorStage:
 
-                    if isinstance(run, int):
-                        classes=True
-                        stages=True
-                    elif "_stage_" in run:
-                        classes=False
-                        stages=True
-                    else:
-                        classes=True
-                        stages=False
+                    classes = args.classes
+                    stages  = args.tumorStage
+
 
                     # Create directory if it does not exist
                     os.makedirs('confusion_matrices', exist_ok=True)
@@ -3999,7 +4039,7 @@ def main(argv):
                         pcaLabelClass = f'3D PCA Plot for graph feature vector ({pcaLabelClass})'
                         
 
-                        X, pca3D = getPCA(mGraphFeatures, 3)
+                        X, pca3D = getPCA(mGraphFeatures, 3) 
                         getPCAloadings(pca3D, pcaLabel = filenameClass[1:])
                         spreadedX, fig = draw3DPCA(X, pca3D, c=y, title=pcaLabelClass, spread=True, stages=True)
                         fig.savefig(f'{Prefix}GraphFeaturePCA{filenameClass}.pdf')
@@ -4042,10 +4082,13 @@ def main(argv):
                         if args.mlpClassifier:
                             message("MLP Classifier on graph feature vectors and classes")
                             mlpClassifier(mGraphFeatures, y, metricResults, "MLP_GFeatures_Class" + graphLabels, savedResults)
+                            
+
 
                     if stages:
                         if args.scalingDeactivation:
                             filteredGraphFeatures = graphVectorPreprocessing(filteredGraphFeatures)
+
                             #DEBUG LINES
                             message("Graph features for tumor stage with scaling")
                             message("Max per column: " + str(filteredGraphFeatures.max(axis=0)))
@@ -4055,6 +4098,7 @@ def main(argv):
 
                         else:
                             message("Graph features for tumor stage without scaling")
+
                             #DEBUG LINES
                             message("First sample before filtering: " + str(filteredGraphFeatures[0, :]))
                             ##############
@@ -4067,6 +4111,9 @@ def main(argv):
                             #DEBUG LINES
                             message("First sample after filtering: " + str(filteredGraphFeatures[0, :]))
                             message("Shape of matrix: " + str(np.shape(filteredGraphFeatures)))
+                            message("Final graph feature matrix (with gender): " + str(filteredGraphFeatures.shape))
+                            message("Unique gender values in features: " + str(np.unique(filteredGraphFeatures[:, -1])))
+
                             ##############
 
                         
@@ -4140,7 +4187,7 @@ def main(argv):
                 bstdevFiltering = args.stdevFiltering
 
 
-            gMainGraph, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, vtumorStage = getGraphAndData(bResetGraph=False,
+            gMainGraph, mFeatures_noNaNs, vClass, saRemainingFeatureNames, sampleIDs, feat_names, vtumorStage, gender = getGraphAndData(bResetGraph=False,
                                                                                                     dEdgeThreshold=args.edgeThreshold, bResetFiles=args.resetCSVCacheFiles,
                                                                                                     bPostProcessing=args.postProcessing, bstdevFiltering=bstdevFiltering,
                                                                                                     bNormalize=args.normalization, bNormalizeLog2Scale=args.logScale,
@@ -4151,18 +4198,29 @@ def main(argv):
             if args.numberOfInstances < 0:
                     vSelectedSamplesClasses = vClass
                     vSelectedtumorStage = vtumorStage
+                    vSelectedGender = gender
             else:
-                vSelectedSamplesClasses = np.concatenate((vClass[0:int(args.numberOfInstances / 2)][:], vClass[-int(args.numberOfInstances / 2):][:]), axis=0)
-                vSelectedtumorStage = np.concatenate((vtumorStage[0:int(args.numberOfInstances / 2)][:], vtumorStage[-int(args.numberOfInstances / 2):][:]), axis=0)
+                
+                
+                half = int(args.numberOfInstances / 2)
+                vSelectedSamplesClasses = np.concatenate(
+                (vClass[0:half], vClass[-half:]), axis=0)
+                vSelectedtumorStage = np.concatenate(
+                (vtumorStage[0:half], vtumorStage[-half:]), axis=0)
+                vSelectedGender = np.concatenate(             # NEW: same subset rule
+                (gender[0:half], gender[-half:]), axis=0)
+
             # Create directory if it does not exist
             os.makedirs('confusion_matrices', exist_ok=True)
             
             if args.fullFeatureVector or args.stdevFiltering:
-                featureVectorsEvaluation(vSelectedSamplesClasses, mFeatures_noNaNs, metricResults, savedResults, vSelectedtumorStage, sampleIDs,
+                featureVectorsEvaluation(vClass, mFeatures_noNaNs, metricResults, savedResults, vtumorStage, sampleIDs, gender,
                                     classes=args.classes, tumorStage=args.tumorStage, bstdevFiltering=bstdevFiltering, bdecisionTree=args.decisionTree, 
                                     bkneighbors=args.kneighbors, bxgboost=args.xgboost, brandomforest=args.randomforest,
                                     bnaivebayes=args.naivebayes, bstratifieddummyclf=args.stratifieddummyclf,
                                     bmostfrequentdummyclf=args.mostfrequentdummyclf, bmlpClassifier=args.mlpClassifier)
+
+        
 
             if args.pcaPerLevel and not bstdevFiltering:
                 levels = getOmicLevels(feat_names)
@@ -4170,11 +4228,12 @@ def main(argv):
                     modifiedmFeatures_noNaNs = mFeatures_noNaNs[:, indexes[0]:indexes[1]]
                     
                     #DEBUG LINES
+                    message("PCA PER LEVEL BEGINS. . .")
                     message(f"level: {level}, indexes: {indexes}")
                     message(f"Shape of modifiedmFeatures_noNaNs: {modifiedmFeatures_noNaNs.shape}")
                     ############
 
-                    featureVectorsEvaluation(vSelectedSamplesClasses, modifiedmFeatures_noNaNs, metricResults, savedResults, vSelectedtumorStage, sampleIDs,
+                    featureVectorsEvaluation(vSelectedSamplesClasses, modifiedmFeatures_noNaNs, metricResults, savedResults, vSelectedtumorStage, sampleIDs, gender,
                                 omicLevel = level, classes=args.classes, tumorStage=args.tumorStage, bstdevFiltering=bstdevFiltering, bdecisionTree=args.decisionTree, 
                                 bkneighbors=args.kneighbors, bxgboost=args.xgboost, brandomforest=args.randomforest,
                                 bnaivebayes=args.naivebayes, bstratifieddummyclf=args.stratifieddummyclf,
@@ -4186,9 +4245,9 @@ def main(argv):
         new_df = pd.DataFrame.from_dict(savedResults, orient='index').reset_index()
         new_df.rename(columns={'index': 'sfeatClass'}, inplace=True)
 
-        if os.path.exists("saved_results.csv"):
+        if os.path.exists("saved_results0.7.csv"):
             # Read the existing CSV file into a DataFrame
-            existing_df = pd.read_csv("saved_results.csv")
+            existing_df = pd.read_csv("saved_results0.7.csv")
         else:
             # Create an empty DataFrame if the CSV file does not exist
             existing_df = pd.DataFrame()
@@ -4200,7 +4259,7 @@ def main(argv):
             combined_df = new_df
 
         # Write the updated DataFrame back to the CSV file
-        combined_df.to_csv("saved_results.csv", index=False)
+        combined_df.to_csv("saved_results0.7.csv", index=False)
 
     if args.wilcoxonTest and os.path.exists("saved_results.csv"):
         # Read the existing CSV file into a DataFrame
