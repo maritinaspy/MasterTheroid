@@ -65,9 +65,9 @@ import numpy as np
 # Prefix for intermediate files
 Prefix = ""
 THREADS_TO_USE = mp.cpu_count()  # Init to all CPUs
-FEATURE_VECTOR_FILENAME = "/datastore/maritina/normalized_data_integrated_matrix1_GENDER.txt"
-os.chdir("/datastore/maritina")
-lock = Lock()
+FEATURE_VECTOR_FILENAME = "/datastore/maritina/MasterTheroid/normalized_data_integrated_matrix1_GENDER.txt"
+os.chdir("/datastore/maritina/MasterTheroid")
+lock = Lock() 
 mpl_lock = Lock()
 
 GLOBAL_SAMPLEIDS = None
@@ -125,12 +125,6 @@ def draw3DPCA(
 ):
     """
     3D PCA visualization.
-
-    Color encoding:
-    - Tumor/Normal: color = (gender + class)
-    - Tumor stages: color = (gender + stage)
-
-    Marker: same for all points.
     """
 
     print("explained variance ratio (first 3 components):",
@@ -153,26 +147,37 @@ def draw3DPCA(
         gender = np.asarray(gender, dtype=int)
 
     if c is None:
-        c = np.zeros(n)
+        c = np.zeros(n, dtype=int)
+        c_is_na = np.zeros(n, dtype=bool)
     else:
-        c = np.asarray(c, dtype=int)
+        c_series = pd.Series(c)
 
-    combo = list(zip(gender, c))
+    # cleaning strings ( "1 ", "1.0", "\n")
+        c_clean = c_series.astype(str).str.strip()
+
+    #  NA
+        c_is_na = c_clean.str.upper().eq("NA") | c_series.isna()
+
+    # NA values -> -1 in order to be colored
+        c_num = pd.to_numeric(c_clean, errors="coerce")
+        c_num[c_is_na] = -1
+
+    # rest of them stay as they are
+        c = c_num.astype(int).to_numpy()
+
     unique_c = np.unique(c)
-
-    # --------------------------
-    # COLOR MAPS
-    # --------------------------
-    color_map = {}
+    print("Stages used in plot:", np.unique(c, return_counts=True))
 
     # Case A: Tumor / Normal (2 classes)
-    if len(unique_c) == 2:
+    if len(unique_c) == 2 and not stages:
         color_map = {
             (0, 0): "#1f77b4",  # Male - Tumor
             (1, 0): "#d62728",  # Female - Tumor
             (0, 1): "#aec7e8",  # Male - Normal
             (1, 1): "#ff9896",  # Female - Normal
         }
+        combo = list(zip(gender, c))
+        colors = [to_rgba(color_map.get(x, "gray")) for x in combo]
 
         legend_elements = [
             Line2D([0], [0], marker='o', color='w', label='Male – Tumor',
@@ -184,57 +189,91 @@ def draw3DPCA(
             Line2D([0], [0], marker='o', color='w', label='Female – Normal',
                    markerfacecolor='#ff9896', markersize=16),
         ]
-
-    # Case B: Tumor Stages
+        ax.scatter(
+            X[:, 0], X[:, 1], X[:, 2],
+            c=colors,
+            marker="o",
+            edgecolor='k',
+            s=110,
+            depthshade=False
+        )
+    # --------------------------
+    # Case B: Tumor Stages (0–4 + NA)
+    # Color = stage, Marker = gender
+    # --------------------------
     else:
         stage_base_colors = {
+            0: "#7f7f7f",   # Stage 0 
             1: "#1b9e77",   # Stage I
             2: "#d95f02",   # Stage II
             3: "#7570b3",   # Stage III
             4: "#e7298a"    # Stage IV
         }
 
-        for stage, base_color in stage_base_colors.items():
-            color_map[(0, stage)] = base_color
-            color_map[(1, stage)] = lighten_color(base_color, 0.4)
+        marker_map = {
+            0: "o",  # male
+            1: "^",  # female
+            2: "X"   # unknown
+        }
 
-        legend_elements = []
-        for stage, base_color in stage_base_colors.items():
-            legend_elements.extend([
-                Line2D([0], [0], marker='o', color='w',
-                       label=f'Male – Stage {stage}',
-                       markerfacecolor=base_color, markersize=16),
-                Line2D([0], [0], marker='o', color='w',
-                       label=f'Female – Stage {stage}',
-                       markerfacecolor=lighten_color(base_color, 0.4),
-                       markersize=16),
-            ])
+        # Legend: stages (colors)
+        legend_elements = [
+            Line2D([0], [0], marker='s', color='w',
+                   label=f"Stage {st}",
+                   markerfacecolor=col, markersize=16)
+            for st, col in stage_base_colors.items()
+        ]
 
-    # --------------------------
-    # ASSIGN COLORS
-    # --------------------------
-    colors = [to_rgba(color_map.get(x, "gray")) for x in combo]
-    # --------------------------
-    # PLOT
-    # --------------------------
-    ax.scatter(
-        X[:, 0], X[:, 1], X[:, 2],
-        c=colors,
-        marker="o",
-        edgecolor='k',
-        s=110,
-        depthshade=False
-    )
+        # Legend: NA (gray)
+        if np.any(c_is_na) or np.any(c == -1):
+            legend_elements.append(
+                Line2D([0], [0], marker='s', color='w',
+                       label="Stage NA",
+                       markerfacecolor="gray", markersize=16)
+            )
+
+        # Legend: gender (shapes)
+        legend_elements += [
+            Line2D([0], [0], marker=marker_map[0], color='w',
+                   label="Male", markerfacecolor="gray",
+                   markeredgecolor='k', markersize=16),
+            Line2D([0], [0], marker=marker_map[1], color='w',
+                   label="Female", markerfacecolor="gray",
+                   markeredgecolor='k', markersize=16),
+        ]
+        if np.any(gender == 2):
+            legend_elements.append(
+                Line2D([0], [0], marker=marker_map[2], color='w',
+                       label="Unknown", markerfacecolor="gray",
+                       markeredgecolor='k', markersize=16)
+            )
+
+        # Scatter: gender (marker), colored-> stage, NA -> gray
+        for gval in np.unique(gender):
+            gmask = (gender == gval)
+
+            cols = []
+            for st, is_na in zip(c[gmask], c_is_na[gmask]):
+                if is_na or int(st) == -1:
+                    cols.append(to_rgba("gray"))
+                else:
+                    cols.append(to_rgba(stage_base_colors.get(int(st), "gray")))
+
+            ax.scatter(
+                X[gmask, 0], X[gmask, 1], X[gmask, 2],
+                c=cols,
+                marker=marker_map.get(int(gval), "o"),
+                edgecolor='k',
+                s=110,
+                depthshade=False
+            )
 
     # --------------------------
     # AXES & TITLE
     # --------------------------
-    ax.set_xlabel(f"PC1 ({pca3DRes.explained_variance_ratio_[0]:.2f})",
-                  fontsize=18)
-    ax.set_ylabel(f"PC2 ({pca3DRes.explained_variance_ratio_[1]:.2f})",
-                  fontsize=18)
-    ax.set_zlabel(f"PC3 ({pca3DRes.explained_variance_ratio_[2]:.2f})",
-                  fontsize=18)
+    ax.set_xlabel(f"PC1 ({pca3DRes.explained_variance_ratio_[0]:.2f})", fontsize=18)
+    ax.set_ylabel(f"PC2 ({pca3DRes.explained_variance_ratio_[1]:.2f})", fontsize=18)
+    ax.set_zlabel(f"PC3 ({pca3DRes.explained_variance_ratio_[2]:.2f})", fontsize=18)
 
     ax.set_xticklabels([])
     ax.set_yticklabels([])
@@ -242,7 +281,6 @@ def draw3DPCA(
     ax.set_title(title, fontsize=22)
 
     ax.legend(handles=legend_elements, loc='upper right', fontsize=14)
-
     fig.show()
 
     return (X, fig) if stages else fig
@@ -292,7 +330,8 @@ def getPCAloadings(pca, pcaLabel='', return_data=False):
         return loadings_df
     else:
         print(f'PCA loadings of the PC1 ({pcaLabel})')
-        print(loadings_df)
+        with pd.option_context('display.float_format', '{:.6f}'.format):
+            print(loadings_df)
 
 
 def getPCAloadingsPerClass(mGraphFeatures, y, pcaLabel):
@@ -304,7 +343,8 @@ def getPCAloadingsPerClass(mGraphFeatures, y, pcaLabel):
     X, pca3D = getPCA(tumor_mGraphFeatures, 3)
     loadings_df = getPCAloadings(pca3D, return_data=True)
     print(f'PCA loadings of the PC1 ({pcaLabel})\nfor tumor samples (n = {np.shape(tumor_mGraphFeatures)[0]})')
-    print(loadings_df)
+    with pd.option_context('display.float_format', '{:.6f}'.format):
+        print(loadings_df)
 
     # get normal samples
     normal_mask = [val == 1 for val in y]
@@ -312,7 +352,8 @@ def getPCAloadingsPerClass(mGraphFeatures, y, pcaLabel):
     X, pca3D = getPCA(normal_mGraphFeatures, 3)
     loadings_df = getPCAloadings(pca3D, return_data=True)
     print(f'\nPCA loadings of the PC1 ({pcaLabel})\nfor normal samples (n = {np.shape(normal_mGraphFeatures)[0]})')
-    print(loadings_df)
+    with pd.option_context('display.float_format', '{:.6f}'.format):
+        print(loadings_df)
     message("Calculating PCA loadings for each class...Done")
 
 def plotExplainedVariance(mFeatures_noNaNs, n_components=100, featSelection = False):
@@ -759,40 +800,32 @@ def exportImputatedMatrix (mFeatures, sample_ids, feat_names):
 
     imputedDf = pd.DataFrame(matrixForKnnImp, index= filtered_features, columns=filtered_sample_ids)
 
-    imputedDf.to_csv('/datastore/maritina/imputedMethylationMatrix.txt')  
+    imputedDf.to_csv('/datastore/maritina/MasterTheroid/imputedMethylationMatrix.txt')  
 
 def graphVectorPreprocessing(mGraphFeatures):
     """
-    Scales ONLY the topological graph features.
-    If the last column is binary (0/1), it is treated as gender and kept unchanged.
-    Removes all-zero columns only from the scaled topo part.
+    Scale ONLY the 6 topological features.
+    Keep gender (last col) unchanged if present (0/1).
+    Do NOT drop any columns -> stable meaning of each column forever.
     """
     mGraphFeatures = np.asarray(mGraphFeatures)
 
-    # Detect if last column is binary 0/1 -> treat as gender
     last_col = mGraphFeatures[:, -1]
-    is_binary_last = np.all(np.isin(np.unique(last_col), [0, 1]))
+    is_gender_last = np.all(np.isin(np.unique(last_col), [0, 1])) and mGraphFeatures.shape[1] == 7
 
-    if is_binary_last and mGraphFeatures.shape[1] > 1:
-        X_topo = mGraphFeatures[:, :-1]
-        gender_col = last_col.reshape(-1, 1)
+    if is_gender_last:
+        topo = mGraphFeatures[:, :6]                 # 6 topo metrics in fixed order
+        gender = mGraphFeatures[:, 6].reshape(-1, 1) # keep 0/1
     else:
-        X_topo = mGraphFeatures
-        gender_col = None
+        topo = mGraphFeatures
+        gender = None
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_topo)
+    topo_scaled = scaler.fit_transform(topo)
 
-    # remove columns that are all 0 after scaling (your original behavior)
-    res = np.all(X_scaled == 0, axis=0)
-    resIndex = np.where(~res)[0]
-    X_scaled = X_scaled[:, resIndex]
-
-    # Re-attach gender unchanged (0/1)
-    if gender_col is not None:
-        X_scaled = np.hstack((X_scaled, gender_col))
-
-    return X_scaled
+    if gender is not None:
+        return np.hstack((topo_scaled, gender))
+    return topo_scaled
 
 def getLevelIndices():
     """
@@ -1602,7 +1635,7 @@ def getFeatureGraph(mAllData, saFeatures, dEdgeThreshold=0.30, nfeat=50, bResetG
     else:
         # fUsefulFeatureNames = open("/home/thlamp/tcga/data/DEGs" +str(nfeat) + ".csv", "r")
         #fUsefulFeatureNames = open("C:/py_script/defs" + degsFile, "r")
-        fUsefulFeatureNames = open(os.path.join("/datastore/maritina", degsFile), "r")
+        fUsefulFeatureNames = open(os.path.join("/datastore/maritina/MasterTheroid", degsFile), "r")
 
 
         # labelfile, should have stored tumor_stage or labels?       
@@ -2739,7 +2772,7 @@ def plotTopologicalFeatures(sampleIDs, features, directory, title, filename):
     plt.xlabel("Sample ID")
     plt.ylabel("Value")
     plt.tight_layout()
-    plt.savefig(f'/datastore/maritina/{directory}/{filename}')
+    plt.savefig(f'/datastore/maritina/MasterTheroid/{directory}/{filename}')
     plt.show()
 
 def getSampleGraphVectors(gMainGraph, mFeatures_noNaNs, saRemainingFeatureNames, sampleIDs, feat_names, bResetFeatures=True, dEdgeThreshold=0.3, nfeat=50,
@@ -2840,12 +2873,8 @@ def getSampleGraphVectors(gMainGraph, mFeatures_noNaNs, saRemainingFeatureNames,
     gender_map = {sid: g for sid, g in zip(GLOBAL_SAMPLEIDS, GLOBAL_GENDER)}
     genderSelected = np.array([gender_map[sid] for sid in sampleIDsSelected], dtype=float).reshape(-1, 1)
 
-    # avoid double-append if already appended
-    if mGraphFeatures.shape[1] >= 1:
-        last_col = mGraphFeatures[:, -1]
-    # if last col already looks binary 0/1, assume gender already present
-        if np.all(np.isin(np.unique(last_col), [0, 1])):
-            return mGraphFeatures
+    if mGraphFeatures.shape[1] == 7:
+        return mGraphFeatures
 
     if mGraphFeatures.shape[0] != genderSelected.shape[0]:
         raise ValueError(f"Row mismatch: graph={mGraphFeatures.shape[0]} gender={genderSelected.shape[0]}")
@@ -3887,7 +3916,7 @@ def main(argv):
     message("Run setup: " + (str(args)))
 
     # change working directory
-    os.chdir('/datastore/maritina')
+    os.chdir('/datastore/maritina/MasterTheroid')
 
     # Update global prefix variable
     global Prefix
@@ -4245,9 +4274,9 @@ def main(argv):
         new_df = pd.DataFrame.from_dict(savedResults, orient='index').reset_index()
         new_df.rename(columns={'index': 'sfeatClass'}, inplace=True)
 
-        if os.path.exists("saved_results0.7.csv"):
+        if os.path.exists("saved_results150stage_0.3.csv"):
             # Read the existing CSV file into a DataFrame
-            existing_df = pd.read_csv("saved_results0.7.csv")
+            existing_df = pd.read_csv("saved_results150stage_0.3.csv")
         else:
             # Create an empty DataFrame if the CSV file does not exist
             existing_df = pd.DataFrame()
@@ -4259,7 +4288,7 @@ def main(argv):
             combined_df = new_df
 
         # Write the updated DataFrame back to the CSV file
-        combined_df.to_csv("saved_results0.7.csv", index=False)
+        combined_df.to_csv("saved_results150stage_0.3.csv", index=False)
 
     if args.wilcoxonTest and os.path.exists("saved_results.csv"):
         # Read the existing CSV file into a DataFrame
