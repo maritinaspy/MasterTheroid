@@ -3999,6 +3999,10 @@ def main(argv):
                     vSelectedSamplesClasses = np.concatenate((vClass[0:int(args.numberOfInstances / 2)][:], vClass[-int(args.numberOfInstances / 2):][:]), axis=0)
                     vSelectedtumorStage = np.concatenate((vtumorStage[0:int(args.numberOfInstances / 2)][:], vtumorStage[-int(args.numberOfInstances / 2):][:]), axis=0)
                 
+                print(type(vtumorStage[0]), vtumorStage[:10])
+                print("unique:", np.unique(vtumorStage)[:10])
+
+
                 filteredFeatures, filteredGraphFeatures, filteredTumorStage, selectedvClass, selectedGender = filterTumorStage(mFeatures_noNaNs, vSelectedtumorStage, vSelectedSamplesClasses, sampleIDs, vGender=gender, mgraphsFeatures=mGraphFeatures, useGraphFeatures=True)
                 
 
@@ -4067,16 +4071,15 @@ def main(argv):
                         filenameClass=f'_Class_{filename}'
                         pcaLabelClass = f'3D PCA Plot for graph feature vector ({pcaLabelClass})'
                         
-
+                        vGender_clean = np.array(gender, dtype=object)
+                        mask_na = (vGender_clean == 'NA') | (vGender_clean == '') | (vGender_clean == 'NaN')
+                        vGender_clean[mask_na] = 2
+                        gender_vec = vGender_clean.astype(int)
+                        
                         X, pca3D = getPCA(mGraphFeatures, 3) 
                         getPCAloadings(pca3D, pcaLabel = filenameClass[1:])
-                        spreadedX, fig = draw3DPCA(X, pca3D, c=y, title=pcaLabelClass, spread=True, stages=True)
+                        fig = draw3DPCA(X, pca3D, c=y, gender=gender_vec, title=pcaLabelClass, spread=True, stages=False)
                         fig.savefig(f'{Prefix}GraphFeaturePCA{filenameClass}.pdf')
-
-                        # Extract class vector for colors
-                        aCategories, ystages = np.unique(vSelectedtumorStage, return_inverse=True)
-                        fig = draw3DPCA(spreadedX, pca3D, c=ystages, title=pcaLabelClass)
-                        fig.savefig(f'{Prefix}GraphFeaturePCA{filenameClass}_with_stages.pdf')
 
                         getPCAloadingsPerClass(mGraphFeatures, y, filenameClass[1:])
 
@@ -4155,7 +4158,8 @@ def main(argv):
                         
                         X, pca3D = getPCA(filteredGraphFeatures, 3)
                         getPCAloadings(pca3D, pcaLabel = filenameStage[1:])
-                        fig = draw3DPCA(X, pca3D, c=y, title=pcaLabelStage, spread=True)
+                        #i put c=filteredTumorStage to include only the known stages.not the NA=0.
+                        fig = draw3DPCA(X, pca3D, c=filteredTumorStage, gender=selectedGender, title=pcaLabelStage, spread=True)
                         fig.savefig(f'{Prefix}GraphFeaturePCA{filenameStage}.pdf')
 
                         if args.decisionTree:
@@ -4274,9 +4278,9 @@ def main(argv):
         new_df = pd.DataFrame.from_dict(savedResults, orient='index').reset_index()
         new_df.rename(columns={'index': 'sfeatClass'}, inplace=True)
 
-        if os.path.exists("saved_results150stage_0.3.csv"):
+        if os.path.exists("saved_results450stage_0.4.csv"):
             # Read the existing CSV file into a DataFrame
-            existing_df = pd.read_csv("saved_results150stage_0.3.csv")
+            existing_df = pd.read_csv("saved_results450stage_0.4.csv")
         else:
             # Create an empty DataFrame if the CSV file does not exist
             existing_df = pd.DataFrame()
@@ -4288,7 +4292,7 @@ def main(argv):
             combined_df = new_df
 
         # Write the updated DataFrame back to the CSV file
-        combined_df.to_csv("saved_results150stage_0.3.csv", index=False)
+        combined_df.to_csv("saved_results450stage_0.4.csv", index=False)
 
     if args.wilcoxonTest and os.path.exists("saved_results.csv"):
         # Read the existing CSV file into a DataFrame
